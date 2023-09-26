@@ -7,10 +7,11 @@ import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype as is_datetime
 from sklearn.impute import KNNImputer
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.preprocessing import OneHotEncoder, PolynomialFeatures
+from sklearn.preprocessing import OneHotEncoder, KBinsDiscretizer, PolynomialFeatures
 from xgboost.sklearn import XGBRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import kstest
+from itertools import combinations
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.offline import plot
@@ -26,6 +27,8 @@ class Regression:
         binary=True, 
         imputation=True, 
         variance=True,
+        atwood=True,
+        binning=True,
         reciprocal=True, 
         interaction=True, 
         selection=True,
@@ -37,10 +40,12 @@ class Regression:
         self.binary = binary  # should categorical features be converted to binary features?
         self.imputation = imputation  # should missing values be filled in?
         self.variance = variance  # should we remove constant features?
+        self.atwood = atwood  # should we compute atwood numbers?
+        self.binning = binning  # should we put continous features into bins?
         self.reciprocal = reciprocal  # should reciporcals be computed?
         self.interaction = interaction  # should interactions be computed?
         self.selection = selection  # should we perform feature selection?
-        
+
         # create folders for output files
         self.folder(name)
         self.folder(f"{name}/dump")  # machine learning pipeline and data
@@ -66,10 +71,13 @@ class Regression:
         self.categorical = CategoricalFeatures(self.binary)
         self.names2 = FeatureNames(self.rename)
         self.impute = ImputeFeatures(self.imputation)
-        self.constant = ConstantFeatures(self.variance)
+        self.constant1 = ConstantFeatures(self.variance)
         self.selection1 = FeatureSelector(self.selection)
+        self.numbers = AtwoodNumbers(self.atwood)
+        self.bin = BinFeatures(self.binning)
         self.reciprocals = Reciprocals(self.reciprocal)
         self.interactions = Interactions(self.interaction)
+        self.constant2 = ConstantFeatures(self.variance)
         self.selection2 = FeatureSelector(self.selection)
         self.tree = XGBRegressor(
             booster="gbtree",
@@ -89,10 +97,14 @@ class Regression:
         preprocessX = self.categorical.fit_transform(preprocessX)
         preprocessX = self.names2.fit_transform(preprocessX)
         preprocessX = self.impute.fit_transform(preprocessX)
-        preprocessX = self.constant.fit_transform(preprocessX)
+        preprocessX = self.constant1.fit_transform(preprocessX)
         preprocessX = self.selection1.fit_transform(preprocessX, preprocessy)
+        numbers = self.numbers.fit_transform(preprocessX)
+        preprocessX = self.bin.fit_transform(preprocessX)
         preprocessX = self.reciprocals.fit_transform(preprocessX)
         preprocessX = self.interactions.fit_transform(preprocessX)
+        preprocessX = pd.concat([preprocessX, numbers], axis="columns")
+        preprocessX = self.constant2.fit_transform(preprocessX)
         preprocessX = self.selection2.fit_transform(preprocessX, preprocessy)
         
         # run the pipeline on training data
@@ -102,10 +114,14 @@ class Regression:
         trainX = self.categorical.transform(trainX)
         trainX = self.names2.transform(trainX)
         trainX = self.impute.transform(trainX)
-        trainX = self.constant.transform(trainX)
+        trainX = self.constant1.transform(trainX)
         trainX = self.selection1.transform(trainX)
+        numbers = self.numbers.transform(trainX)
+        trainX = self.bin.transform(trainX)
         trainX = self.reciprocals.transform(trainX)
         trainX = self.interactions.transform(trainX)
+        trainX = pd.concat([trainX, numbers], axis="columns")
+        trainX = self.constant2.transform(trainX)
         trainX = self.selection2.transform(trainX)
         print("> Training XGBoost")
         self.tree.fit(trainX, trainy)
@@ -123,10 +139,14 @@ class Regression:
         testX = self.categorical.transform(testX)
         testX = self.names2.transform(testX)
         testX = self.impute.transform(testX)
-        testX = self.constant.transform(testX)
+        testX = self.constant1.transform(testX)
         testX = self.selection1.transform(testX)
+        numbers = self.numbers.transform(testX)
+        testX = self.bin.transform(testX)
         testX = self.reciprocals.transform(testX)
         testX = self.interactions.transform(testX)
+        testX = pd.concat([testX, numbers], axis="columns")
+        testX = self.constant2.transform(testX)
         testX = self.selection2.transform(testX)
         self.performance(testX, testy)
 
@@ -143,10 +163,14 @@ class Regression:
         X = self.categorical.transform(X)
         X = self.names2.transform(X)
         X = self.impute.transform(X)
-        X = self.constant.transform(X)
+        X = self.constant1.transform(X)
         X = self.selection1.transform(X)
+        numbers = self.numbers.transform(X)
+        X = self.bin.transform(X)
         X = self.reciprocals.transform(X)
         X = self.interactions.transform(X)
+        X = pd.concat([X, numbers], axis="columns")
+        X = self.constant2.transform(X)
         X = self.selection2.transform(X)
         print("> Training XGBoost")
         self.tree.fit(X, y)
@@ -177,10 +201,14 @@ class Regression:
         X = self.categorical.transform(X)
         X = self.names2.transform(X)
         X = self.impute.transform(X)
-        X = self.constant.transform(X)
+        X = self.constant1.transform(X)
         X = self.selection1.transform(X)
+        numbers = self.numbers.transform(X)
+        X = self.bin.transform(X)
         X = self.reciprocals.transform(X)
         X = self.interactions.transform(X)
+        X = pd.concat([X, numbers], axis="columns")
+        X = self.constant2.transform(X)
         X = self.selection2.transform(X)
         y = self.tree.predict(X)
 
@@ -466,14 +494,20 @@ class Regression:
             pickle.dump(self.names2, f)
         with open(f"{self.name}/dump/impute", "wb") as f:
             pickle.dump(self.impute, f)
-        with open(f"{self.name}/dump/constant", "wb") as f:
-            pickle.dump(self.constant, f)
+        with open(f"{self.name}/dump/constant1", "wb") as f:
+            pickle.dump(self.constant1, f)
         with open(f"{self.name}/dump/selection1", "wb") as f:
             pickle.dump(self.selection1, f)
+        with open(f"{self.name}/dump/numbers", "wb") as f:
+            pickle.dump(self.numbers, f)
+        with open(f"{self.name}/dump/bin", "wb") as f:
+            pickle.dump(self.bin, f)
         with open(f"{self.name}/dump/reciprocals", "wb") as f:
             pickle.dump(self.reciprocals, f)
         with open(f"{self.name}/dump/interactions", "wb") as f:
             pickle.dump(self.interactions, f)
+        with open(f"{self.name}/dump/constant2", "wb") as f:
+            pickle.dump(self.constant2, f)
         with open(f"{self.name}/dump/selection2", "wb") as f:
             pickle.dump(self.selection2, f)
         with open(f"{self.name}/dump/tree", "wb") as f:
@@ -493,14 +527,20 @@ class Regression:
             self.names2 = pickle.load(f)
         with open(f"{self.name}/dump/impute", "rb") as f:
             self.impute = pickle.load(f)
-        with open(f"{self.name}/dump/constant", "rb") as f:
-            self.constant = pickle.load(f)
+        with open(f"{self.name}/dump/constant1", "rb") as f:
+            self.constant1 = pickle.load(f)
         with open(f"{self.name}/dump/selection1", "rb") as f:
             self.selection1 = pickle.load(f)
+        with open(f"{self.name}/dump/numbers", "rb") as f:
+            self.numbers = pickle.load(f)
+        with open(f"{self.name}/dump/bin", "rb") as f:
+            self.bin = pickle.load(f)
         with open(f"{self.name}/dump/reciprocals", "rb") as f:
             self.reciprocals = pickle.load(f)
         with open(f"{self.name}/dump/interactions", "rb") as f:
             self.interactions = pickle.load(f)
+        with open(f"{self.name}/dump/constant2", "rb") as f:
+            self.constant2 = pickle.load(f)
         with open(f"{self.name}/dump/selection2", "rb") as f:
             self.selection2 = pickle.load(f)
         with open(f"{self.name}/dump/tree", "rb") as f:
@@ -590,7 +630,7 @@ class CategoricalFeatures:
 
         strings = X.select_dtypes(include="object").columns.tolist()
         df = X.copy().drop(columns=strings)
-        numbers = [col for col in df.columns if len(df[col].unique()) <= 30]
+        numbers = [col for col in df.columns if len(df[col].unique()) <= 53]
         self.categorical = strings + numbers
         self.encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
         return self.encoder.fit(X[self.categorical].astype(str))
@@ -661,6 +701,71 @@ class ConstantFeatures:
         return self.transform(X, y)
 
 
+class AtwoodNumbers:
+    def __init__(self, atwood=True):
+        self.atwood = atwood
+
+    def fit(self, X, y=None):
+        if not self.atwood:
+            return self
+        print("> Computing Atwoood Numbers")
+
+        self.columns = [col for col in X.columns if len(X[col].unique()) > 2]
+        return self
+
+    def transform(self, X, y=None):
+        if not self.atwood:
+            return X
+        
+        numbers = list()
+        pairs = list(combinations(self.columns, 2))
+        for pair in pairs:
+            numbers.append(pd.DataFrame({
+                f"({pair[0]}-{pair[1]})/({pair[0]}+{pair[1]})": (X[pair[0]] - X[pair[1]]) / (X[pair[0]] + X[pair[1]]),
+            }))
+        df = pd.concat(numbers, axis="columns")
+        df = df.fillna(0)
+        return df
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X, y)
+    
+
+class BinFeatures:
+    def __init__(self, binning=True):
+        self.binning = binning
+
+    def fit(self, X, y=None):
+        if not self.binning:
+            return self
+        print("> Binning Features")
+        
+        self.columns = [col for col in X.columns if len(X[col].unique()) > 2]
+        self.binner = KBinsDiscretizer(n_bins=3, encode="onehot", strategy="uniform", subsample=None)
+        return self.binner.fit(X[self.columns])
+
+    def transform(self, X, y=None):
+        if not self.binning:
+            return X
+
+        df = self.binner.transform(X[self.columns]).toarray()
+        edges = self.binner.bin_edges_
+        columns = list()
+        for i, feature in enumerate(self.columns):
+            bins = np.around(edges[i], 6)
+            columns.append(f"{feature}({bins[0]}-{bins[1]})")
+            columns.append(f"{feature}({bins[1]}-{bins[2]})")
+            columns.append(f"{feature}({bins[2]}-{bins[3]})")
+        df = pd.DataFrame(df, columns=columns)
+        df = pd.concat([X, df], axis="columns")
+        return df
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X, y)
+    
+    
 class Reciprocals:
     def __init__(self, reciprocal=True):
         self.reciprocal = reciprocal
@@ -670,8 +775,7 @@ class Reciprocals:
             return self
         print("> Computing Reciprocals")
 
-        df = 1 / X.copy()
-        self.columns = df.iloc[:, np.where(df.isin([np.inf, -np.inf]).any() == False)[0]].columns.tolist()
+        self.columns = [col for col in X.columns if len(X[col].unique()) > 2]
         return self
 
     def transform(self, X, y=None):
@@ -679,7 +783,7 @@ class Reciprocals:
             return X
 
         df = 1 / X.copy()[self.columns]
-        df.replace([np.inf, -np.inf], 0, inplace=True)
+        df.replace([np.inf, -np.inf], 1e6, inplace=True)
         df.columns = [f"1/{col}" for col in df.columns]
         df = pd.concat([X, df], axis="columns")
         return df
