@@ -725,6 +725,7 @@ class AtwoodNumbers:
             }))
         df = pd.concat(numbers, axis="columns")
         df = df.fillna(0)
+        df.replace([np.inf, -np.inf], 1e6, inplace=True)
         return df
 
     def fit_transform(self, X, y=None):
