@@ -644,6 +644,8 @@ class CategoricalFeatures:
         df = X.copy().drop(columns=strings)
         numbers = [col for col in df.columns if len(df[col].unique()) <= 53]
         self.categorical = strings + numbers
+        if len(self.categorical) == 0:
+            return self
         self.encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
         return self.encoder.fit(X[self.categorical].astype(str))
 
@@ -651,6 +653,8 @@ class CategoricalFeatures:
         if not self.binary:
             return X
 
+        if len(self.categorical) == 0:
+            return X
         continuous = X.copy().drop(columns=self.categorical)
         binary = self.encoder.transform(X[self.categorical].astype(str))
         binary = pd.DataFrame(binary, columns=self.encoder.get_feature_names_out())
@@ -723,6 +727,8 @@ class ScaleFeatures:
         print("> Scaling Features")
         
         self.columns = [col for col in X.columns if len(X[col].unique()) > 2]
+        if len(self.columns) == 0:
+            return self
         self.scaler = MinMaxScaler(feature_range=(0.2, 0.8))
         return self.scaler.fit(X[self.columns])
 
@@ -730,6 +736,8 @@ class ScaleFeatures:
         if not self.scale:
             return X
 
+        if len(self.columns) == 0:
+            return X
         df = self.scaler.transform(X[self.columns])
         df = pd.DataFrame(df, columns=self.columns)
         df = pd.concat([X.drop(columns=self.columns), df], axis="columns")
@@ -755,7 +763,9 @@ class AtwoodNumbers:
     def transform(self, X, y=None):
         if not self.atwood:
             return X
-        
+
+        if len(self.columns) == 0:
+            return X
         numbers = list()
         pairs = list(combinations(self.columns, 2))
         for pair in pairs:
@@ -783,6 +793,8 @@ class BinFeatures:
         print("> Binning Features")
         
         self.columns = [col for col in X.columns if len(X[col].unique()) > 2]
+        if len(self.columns) == 0:
+            return self
         self.binner = KBinsDiscretizer(n_bins=3, encode="onehot", strategy="uniform", subsample=None)
         return self.binner.fit(X[self.columns])
 
@@ -790,6 +802,8 @@ class BinFeatures:
         if not self.binning:
             return X
 
+        if len(self.columns) == 0:
+            return X
         df = self.binner.transform(X[self.columns]).toarray()
         edges = self.binner.bin_edges_
         columns = list()
@@ -823,6 +837,8 @@ class Reciprocals:
         if not self.reciprocal:
             return X
 
+        if len(self.columns) == 0:
+            return X
         df = 1 / X.copy()[self.columns]
         df.replace(np.inf, 1e6, inplace=True)
         df.replace(-np.inf, -1e6, inplace=True)
