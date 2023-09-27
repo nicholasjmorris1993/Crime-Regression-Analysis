@@ -762,10 +762,10 @@ class AtwoodNumbers:
 
     def transform(self, X, y=None):
         if not self.atwood:
-            return X
+            return pd.DataFrame()
 
         if len(self.columns) == 0:
-            return X
+            return pd.DataFrame()
         numbers = list()
         pairs = list(combinations(self.columns, 2))
         for pair in pairs:
