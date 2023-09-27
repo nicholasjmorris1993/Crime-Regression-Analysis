@@ -7,7 +7,7 @@ import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype as is_datetime
 from sklearn.impute import KNNImputer
 from sklearn.feature_selection import VarianceThreshold
-from sklearn.preprocessing import OneHotEncoder, KBinsDiscretizer, PolynomialFeatures
+from sklearn.preprocessing import OneHotEncoder, MinMaxScaler, KBinsDiscretizer, PolynomialFeatures
 from xgboost.sklearn import XGBRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import kstest
@@ -27,6 +27,7 @@ class Regression:
         binary=True, 
         imputation=True, 
         variance=True,
+        scale=True,
         atwood=True,
         binning=True,
         reciprocal=True, 
@@ -40,6 +41,7 @@ class Regression:
         self.binary = binary  # should categorical features be converted to binary features?
         self.imputation = imputation  # should missing values be filled in?
         self.variance = variance  # should we remove constant features?
+        self.scale = scale  # should we scale the features?
         self.atwood = atwood  # should we compute atwood numbers?
         self.binning = binning  # should we put continous features into bins?
         self.reciprocal = reciprocal  # should reciporcals be computed?
@@ -72,6 +74,7 @@ class Regression:
         self.names2 = FeatureNames(self.rename)
         self.impute = ImputeFeatures(self.imputation)
         self.constant1 = ConstantFeatures(self.variance)
+        self.scaler = ScaleFeatures(self.scale)
         self.selection1 = FeatureSelector(self.selection)
         self.numbers = AtwoodNumbers(self.atwood)
         self.bin = BinFeatures(self.binning)
@@ -98,6 +101,7 @@ class Regression:
         preprocessX = self.names2.fit_transform(preprocessX)
         preprocessX = self.impute.fit_transform(preprocessX)
         preprocessX = self.constant1.fit_transform(preprocessX)
+        preprocessX = self.scaler.fit_transform(preprocessX)
         preprocessX = self.selection1.fit_transform(preprocessX, preprocessy)
         numbers = self.numbers.fit_transform(preprocessX)
         preprocessX = self.bin.fit_transform(preprocessX)
@@ -115,6 +119,7 @@ class Regression:
         trainX = self.names2.transform(trainX)
         trainX = self.impute.transform(trainX)
         trainX = self.constant1.transform(trainX)
+        trainX = self.scaler.transform(trainX)
         trainX = self.selection1.transform(trainX)
         numbers = self.numbers.transform(trainX)
         trainX = self.bin.transform(trainX)
@@ -140,6 +145,7 @@ class Regression:
         testX = self.names2.transform(testX)
         testX = self.impute.transform(testX)
         testX = self.constant1.transform(testX)
+        testX = self.scaler.transform(testX)
         testX = self.selection1.transform(testX)
         numbers = self.numbers.transform(testX)
         testX = self.bin.transform(testX)
@@ -164,6 +170,7 @@ class Regression:
         X = self.names2.transform(X)
         X = self.impute.transform(X)
         X = self.constant1.transform(X)
+        X = self.scaler.transform(X)
         X = self.selection1.transform(X)
         numbers = self.numbers.transform(X)
         X = self.bin.transform(X)
@@ -202,6 +209,7 @@ class Regression:
         X = self.names2.transform(X)
         X = self.impute.transform(X)
         X = self.constant1.transform(X)
+        X = self.scaler.transform(X)
         X = self.selection1.transform(X)
         numbers = self.numbers.transform(X)
         X = self.bin.transform(X)
@@ -496,6 +504,8 @@ class Regression:
             pickle.dump(self.impute, f)
         with open(f"{self.name}/dump/constant1", "wb") as f:
             pickle.dump(self.constant1, f)
+        with open(f"{self.name}/dump/scaler", "wb") as f:
+            pickle.dump(self.scaler, f)
         with open(f"{self.name}/dump/selection1", "wb") as f:
             pickle.dump(self.selection1, f)
         with open(f"{self.name}/dump/numbers", "wb") as f:
@@ -529,6 +539,8 @@ class Regression:
             self.impute = pickle.load(f)
         with open(f"{self.name}/dump/constant1", "rb") as f:
             self.constant1 = pickle.load(f)
+        with open(f"{self.name}/dump/scaler", "rb") as f:
+            self.scaler = pickle.load(f)
         with open(f"{self.name}/dump/selection1", "rb") as f:
             self.selection1 = pickle.load(f)
         with open(f"{self.name}/dump/numbers", "rb") as f:
@@ -701,6 +713,33 @@ class ConstantFeatures:
         return self.transform(X, y)
 
 
+class ScaleFeatures:
+    def __init__(self, scale=True):
+        self.scale = scale
+
+    def fit(self, X, y=None):
+        if not self.scale:
+            return self
+        print("> Scaling Features")
+        
+        self.columns = [col for col in X.columns if len(X[col].unique()) > 2]
+        self.scaler = MinMaxScaler(feature_range=(0.2, 0.8))
+        return self.scaler.fit(X[self.columns])
+
+    def transform(self, X, y=None):
+        if not self.scale:
+            return X
+
+        df = self.scaler.transform(X[self.columns])
+        df = pd.DataFrame(df, columns=self.columns)
+        df = pd.concat([X.drop(columns=self.columns), df], axis="columns")
+        return df
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X, y)
+
+    
 class AtwoodNumbers:
     def __init__(self, atwood=True):
         self.atwood = atwood
@@ -725,7 +764,8 @@ class AtwoodNumbers:
             }))
         df = pd.concat(numbers, axis="columns")
         df = df.fillna(0)
-        df.replace([np.inf, -np.inf], 1e6, inplace=True)
+        df.replace(np.inf, 1e6, inplace=True)
+        df.replace(-np.inf, -1e6, inplace=True)
         return df
 
     def fit_transform(self, X, y=None):
@@ -784,7 +824,8 @@ class Reciprocals:
             return X
 
         df = 1 / X.copy()[self.columns]
-        df.replace([np.inf, -np.inf], 1e6, inplace=True)
+        df.replace(np.inf, 1e6, inplace=True)
+        df.replace(-np.inf, -1e6, inplace=True)
         df.columns = [f"1/{col}" for col in df.columns]
         df = pd.concat([X, df], axis="columns")
         return df
