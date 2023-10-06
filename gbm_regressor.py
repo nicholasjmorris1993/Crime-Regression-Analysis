@@ -657,8 +657,16 @@ class TimeFeatures:
         if self.verbose:
             print("> Extracting Time Features")
 
+        # convert any timestamp columns to datetime data type
+        df = X.apply(
+            lambda col: pd.to_datetime(col, errors="ignore")
+            if col.dtypes == object 
+            else col, 
+            axis=0,
+        )
+
         # check if any columns are timestamps
-        self.features = [col for col in X.columns if is_datetime(X[col])]
+        self.features = [col for col in df.columns if is_datetime(df[col])]
         return self
 
     def transform(self, X, y=None):
