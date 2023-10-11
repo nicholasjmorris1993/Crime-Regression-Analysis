@@ -22,55 +22,64 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.offline import plot
 
+if os.name == "nt":
+    path_sep = "\\"
+else:
+    path_sep = "/"
+
 
 class Regression:
     def __init__(
         self, 
         name="Regression Analysis", 
-        frac=1, 
+        path=None,
         rename=True, 
         time=True, 
         binary=True, 
         imputation=True, 
         variance=True,
-        scale=True,
         atwood=True,
         binning=True,
         reciprocal=True, 
         interaction=True, 
         selection=True,
+        plots=True,
     ):
         self.name = name  # name of the analysis
-        self.frac= frac  # fraction of data to use for training the preprocessors
+        self.path = path  # the path where results will be exported
         self.rename = rename  # should features be renamed to remove whitespace?
         self.time = time  # should datetime features be computed?
         self.binary = binary  # should categorical features be converted to binary features?
         self.imputation = imputation  # should missing values be filled in?
         self.variance = variance  # should we remove constant features?
-        self.scale = scale  # should we scale the features?
         self.atwood = atwood  # should we compute atwood numbers?
         self.binning = binning  # should we put continous features into bins?
         self.reciprocal = reciprocal  # should reciporcals be computed?
         self.interaction = interaction  # should interactions be computed?
         self.selection = selection  # should we perform feature selection?
+        self.plots = plots  # should we plot the analysis?
+        
+        if self.path is None:
+            self.path = os.getcwd()
 
         # create folders for output files
-        self.folder(name)
-        self.folder(f"{name}/dump")  # machine learning pipeline and data
-        self.folder(f"{name}/plots")  # html figures
+        self.folder(f"{self.path}{path_sep}{self.name}")
+        self.folder(f"{self.path}{path_sep}{self.name}{path_sep}dump")  # machine learning pipeline and data
+        if self.plots:
+            self.folder(f"{self.path}{path_sep}{self.name}{path_sep}plots")  # html figures
 
-    def fit(self, X, y):
+    def validate(self, X, y):
+        # raw data
+        self.X = X.copy()
+        self.y = y.copy()
+
         # split up the data into training and testing
         trainX = X.head(int(0.8 * X.shape[0]))
         trainy = y.head(int(0.8 * y.shape[0]))
         testX = X.tail(int(0.2 * X.shape[0])).reset_index(drop=True)
         testy = y.tail(int(0.2 * y.shape[0])).reset_index(drop=True)
-        
-        # set aside data for preprocessing
-        preprocessX = trainX.head(int(self.frac * trainX.shape[0]))
-        preprocessy = trainy.head(int(self.frac * trainy.shape[0]))
 
-        print("1/6) Model Training")
+        print("Model Training:")
         start = time.time()
 
         # set up the machine learning pipeline
@@ -80,14 +89,14 @@ class Regression:
         self.names2 = FeatureNames(self.rename)
         self.impute = ImputeFeatures(self.imputation)
         self.constant1 = ConstantFeatures(self.variance)
-        self.scaler = ScaleFeatures(self.scale, bounds=(0.2, 0.8))
         self.selection1 = FeatureSelector(self.selection)
+        self.scaler = ScaleFeatures(self.atwood or self.reciprocal, bounds=(0.2, 0.8))
         self.numbers = AtwoodNumbers(self.atwood)
         self.bin = BinFeatures(self.binning)
         self.reciprocals = Reciprocals(self.reciprocal)
         self.interactions = Interactions(self.interaction)
-        self.constant2 = ConstantFeatures(self.variance)
-        self.selection2 = FeatureSelector(self.selection)
+        self.constant2 = ConstantFeatures(self.reciprocal and self.interaction)
+        self.selection2 = FeatureSelector(self.selection and (self.atwood or self.binning or self.reciprocal or self.interaction))
         self.tree = XGBRegressor(
             booster="gbtree",
             n_estimators=100, 
@@ -99,48 +108,31 @@ class Regression:
             random_state=42,
             n_jobs=-1,
         )
-        
-        # run preprocessing
-        preprocessX = self.names1.fit_transform(preprocessX)
-        preprocessX = self.datetime.fit_transform(preprocessX)
-        preprocessX = self.categorical.fit_transform(preprocessX)
-        preprocessX = self.names2.fit_transform(preprocessX)
-        preprocessX = self.impute.fit_transform(preprocessX)
-        preprocessX = self.constant1.fit_transform(preprocessX)
-        preprocessX = self.scaler.fit_transform(preprocessX)
-        preprocessX = self.selection1.fit_transform(preprocessX, preprocessy)
-        numbers = self.numbers.fit_transform(preprocessX)
-        preprocessX = self.bin.fit_transform(preprocessX)
-        preprocessX = self.reciprocals.fit_transform(preprocessX)
-        preprocessX = self.interactions.fit_transform(preprocessX)
-        preprocessX = pd.concat([preprocessX, numbers], axis="columns")
-        preprocessX = self.constant2.fit_transform(preprocessX)
-        preprocessX = self.selection2.fit_transform(preprocessX, preprocessy)
-        
+
         # run the pipeline on training data
         print("> Transforming The Training Data")
-        trainX = self.names1.transform(trainX)
-        trainX = self.datetime.transform(trainX)
-        trainX = self.categorical.transform(trainX)
-        trainX = self.names2.transform(trainX)
-        trainX = self.impute.transform(trainX)
-        trainX = self.constant1.transform(trainX)
-        trainX = self.scaler.transform(trainX)
-        trainX = self.selection1.transform(trainX)
-        numbers = self.numbers.transform(trainX)
-        trainX = self.bin.transform(trainX)
-        trainX = self.reciprocals.transform(trainX)
-        trainX = self.interactions.transform(trainX)
+        trainX = self.names1.fit_transform(trainX)
+        trainX = self.datetime.fit_transform(trainX)
+        trainX = self.categorical.fit_transform(trainX)
+        trainX = self.names2.fit_transform(trainX)
+        trainX = self.impute.fit_transform(trainX)
+        trainX = self.constant1.fit_transform(trainX)
+        trainX = self.selection1.fit_transform(trainX, trainy)
+        trainX = self.scaler.fit_transform(trainX)
+        numbers = self.numbers.fit_transform(trainX)
+        trainX = self.bin.fit_transform(trainX)
+        trainX = self.reciprocals.fit_transform(trainX)
+        trainX = self.interactions.fit_transform(trainX)
         trainX = pd.concat([trainX, numbers], axis="columns")
-        trainX = self.constant2.transform(trainX)
-        trainX = self.selection2.transform(trainX)
+        trainX = self.constant2.fit_transform(trainX)
+        trainX = self.selection2.fit_transform(trainX, trainy)
         print("> Training XGBoost")
         self.tree.fit(trainX, trainy)
 
         end = time.time()
         self.run_time(start, end)
 
-        print("2/6) Model Performance")
+        print("Model Performance:")
         start = time.time()
 
         # transform the testing data and score the performance
@@ -151,8 +143,8 @@ class Regression:
         testX = self.names2.transform(testX)
         testX = self.impute.transform(testX)
         testX = self.constant1.transform(testX)
-        testX = self.scaler.transform(testX)
         testX = self.selection1.transform(testX)
+        testX = self.scaler.transform(testX)
         numbers = self.numbers.transform(testX)
         testX = self.bin.transform(testX)
         testX = self.reciprocals.transform(testX)
@@ -160,51 +152,90 @@ class Regression:
         testX = pd.concat([testX, numbers], axis="columns")
         testX = self.constant2.transform(testX)
         testX = self.selection2.transform(testX)
+        print("> Scoring The Model")
         self.performance(testX, testy)
 
         end = time.time()
         self.run_time(start, end)
 
-        print("3/6) Model Deployment")
+        print("Model Indicators:")
+        start = time.time()
+        
+        print("> Extracting Important Features")
+        self.importance(trainX)
+
+        end = time.time()
+        self.run_time(start, end)
+
+    def fit(self, X, y):
+        # raw data
+        self.X = X.copy()
+        self.y = y.copy()
+
+        print("Model Training:")
         start = time.time()
 
-        # run the pipeline on all the data
-        print("> Transforming All The Data")
-        X = self.names1.transform(X)
-        X = self.datetime.transform(X)
-        X = self.categorical.transform(X)
-        X = self.names2.transform(X)
-        X = self.impute.transform(X)
-        X = self.constant1.transform(X)
-        X = self.scaler.transform(X)
-        X = self.selection1.transform(X)
-        numbers = self.numbers.transform(X)
-        X = self.bin.transform(X)
-        X = self.reciprocals.transform(X)
-        X = self.interactions.transform(X)
+        # set up the machine learning pipeline
+        self.names1 = FeatureNames(self.rename)
+        self.datetime = TimeFeatures(self.time)
+        self.categorical = CategoricalFeatures(self.binary)
+        self.names2 = FeatureNames(self.rename)
+        self.impute = ImputeFeatures(self.imputation)
+        self.constant1 = ConstantFeatures(self.variance)
+        self.selection1 = FeatureSelector(self.selection)
+        self.scaler = ScaleFeatures(self.atwood or self.reciprocal, bounds=(0.2, 0.8))
+        self.numbers = AtwoodNumbers(self.atwood)
+        self.bin = BinFeatures(self.binning)
+        self.reciprocals = Reciprocals(self.reciprocal)
+        self.interactions = Interactions(self.interaction)
+        self.constant2 = ConstantFeatures(self.reciprocal and self.interaction)
+        self.selection2 = FeatureSelector(self.selection and (self.atwood or self.binning or self.reciprocal or self.interaction))
+        self.tree = XGBRegressor(
+            booster="gbtree",
+            n_estimators=100, 
+            learning_rate=0.1,
+            max_depth=7,
+            min_child_weight=1,
+            colsample_bytree=0.8,
+            subsample=0.8,
+            random_state=42,
+            n_jobs=-1,
+        )
+
+        # run the pipeline on the data
+        print("> Transforming The Data")
+        X = self.names1.fit_transform(X)
+        X = self.datetime.fit_transform(X)
+        X = self.categorical.fit_transform(X)
+        X = self.names2.fit_transform(X)
+        X = self.impute.fit_transform(X)
+        X = self.constant1.fit_transform(X)
+        X = self.selection1.fit_transform(X, y)
+        X = self.scaler.fit_transform(X)
+        numbers = self.numbers.fit_transform(X)
+        X = self.bin.fit_transform(X)
+        X = self.reciprocals.fit_transform(X)
+        X = self.interactions.fit_transform(X)
         X = pd.concat([X, numbers], axis="columns")
-        X = self.constant2.transform(X)
-        X = self.selection2.transform(X)
+        X = self.constant2.fit_transform(X)
+        X = self.selection2.fit_transform(X, y)
         print("> Training XGBoost")
         self.tree.fit(X, y)
 
         end = time.time()
         self.run_time(start, end)
 
-        print("4/6) Model Indicators")
+        print("Model Indicators:")
         start = time.time()
-
+        
+        print("> Extracting Important Features")
         self.importance(X)
 
         end = time.time()
         self.run_time(start, end)
-
-        # data we deployed on
-        self.X = X
-        self.y = y
-
+                    
     def predict(self, X):
-        print("5/6) Model Prediction")
+        print("Model Prediction:")
         start = time.time()
 
         # transform and predict new data
@@ -215,8 +246,8 @@ class Regression:
         X = self.names2.transform(X)
         X = self.impute.transform(X)
         X = self.constant1.transform(X)
-        X = self.scaler.transform(X)
         X = self.selection1.transform(X)
+        X = self.scaler.transform(X)
         numbers = self.numbers.transform(X)
         X = self.bin.transform(X)
         X = self.reciprocals.transform(X)
@@ -224,14 +255,16 @@ class Regression:
         X = pd.concat([X, numbers], axis="columns")
         X = self.constant2.transform(X)
         X = self.selection2.transform(X)
+        print("> Getting Predictions")
         y = self.tree.predict(X)
 
         end = time.time()
         self.run_time(start, end)
 
-        print("6/6) Model Monitoring")
+        print("Model Monitoring:")
         start = time.time()
 
+        print("> Computing Feature Drift")
         self.monitor(X, y)
 
         end = time.time()
@@ -240,34 +273,43 @@ class Regression:
         return y
     
     def refit(self, X, y):
+        # add the new data to the model data
+        self.X = pd.concat([self.X, X], axis="index").reset_index(drop=True)
+        self.y = pd.concat([self.y, y], axis="index").reset_index(drop=True)
+
         print("Model Retraining:")
         start = time.time()
 
         # transform the new data
-        print("> Transforming The New Data")
-        X = self.names1.transform(X)
-        X = self.datetime.transform(X)
-        X = self.categorical.transform(X)
-        X = self.names2.transform(X)
-        X = self.impute.transform(X)
-        X = self.constant1.transform(X)
-        X = self.scaler.transform(X)
-        X = self.selection1.transform(X)
-        numbers = self.numbers.transform(X)
-        X = self.bin.transform(X)
-        X = self.reciprocals.transform(X)
-        X = self.interactions.transform(X)
+        print("> Transforming The Updated Data")
+        X = self.names1.fit_transform(self.X)
+        X = self.datetime.fit_transform(X)
+        X = self.categorical.fit_transform(X)
+        X = self.names2.fit_transform(X)
+        X = self.impute.fit_transform(X)
+        X = self.constant1.fit_transform(X)
+        X = self.selection1.fit_transform(X, self.y)
+        X = self.scaler.fit_transform(X)
+        numbers = self.numbers.fit_transform(X)
+        X = self.bin.fit_transform(X)
+        X = self.reciprocals.fit_transform(X)
+        X = self.interactions.fit_transform(X)
         X = pd.concat([X, numbers], axis="columns")
-        X = self.constant2.transform(X)
-        X = self.selection2.transform(X)
-        
-        # add the new data to the model data
-        self.X = pd.concat([self.X, X], axis="index").reset_index(drop=True)
-        self.y = pd.concat([self.y, y], axis="index").reset_index(drop=True)
+        X = self.constant2.fit_transform(X)
+        X = self.selection2.fit_transform(X, self.y)
         
         print("> Training XGBoost")
-        self.tree.fit(self.X, self.y)
+        self.tree.fit(X, self.y)
         
+        end = time.time()
+        self.run_time(start, end)
+
+        print("Model Indicators:")
+        start = time.time()
+        
+        print("> Extracting Important Features")
+        self.importance(X)
+
         end = time.time()
         self.run_time(start, end)
 
@@ -284,20 +326,21 @@ class Regression:
         self.r2 = np.mean(self.r2)
 
         # plot RMSE and R2
-        self.histogram(
-            df,
-            x="RMSE",
-            bins=20,
-            title=f"{self.name}: Histogram For RMSE",
-            font_size=16,
-        )
-        self.histogram(
-            df,
-            x="R2",
-            bins=20,
-            title=f"{self.name}: Histogram For R2",
-            font_size=16,
-        )
+        if self.plots:
+            self.histogram(
+                df,
+                x="RMSE",
+                bins=20,
+                title="Histogram For RMSE",
+                font_size=16,
+            )
+            self.histogram(
+                df,
+                x="R2",
+                bins=20,
+                title="Histogram For R2",
+                font_size=16,
+            )
 
         # compute control limits for residuals
         error = y - predictions
@@ -308,14 +351,15 @@ class Regression:
         in_control /= df.shape[0]
         in_control *= 100
         in_control = f"{round(in_control, 2)}%"
-        self.histogram(
-            df,
-            x="Individual",
-            vlines=[df["Individual LCL"][0], df["Individual UCL"][0]],
-            bins=20,
-            title=f"{self.name}: Histogram For Residuals, {in_control} In Control",
-            font_size=16,
-        )
+        if self.plots:
+            self.histogram(
+                df,
+                x="Individual",
+                vlines=[df["Individual LCL"][0], df["Individual UCL"][0]],
+                bins=20,
+                title=f"Histogram For Residuals, {in_control} In Control",
+                font_size=16,
+            )
         self.in_control = in_control
 
         # plot the control limits for the moving range of residuals
@@ -323,27 +367,29 @@ class Regression:
         in_control /= df.shape[0]
         in_control *= 100
         in_control = f"{round(in_control, 2)}%"
-        self.histogram(
-            df,
-            x="Moving Range",
-            vlines=[df["Moving Range LCL"][0], df["Moving Range UCL"][0]],
-            bins=20,
-            title=f"{self.name}: Histogram For The Moving Range Of Residuals, {in_control} In Control",
-            font_size=16,
-        )
+        if self.plots:
+            self.histogram(
+                df,
+                x="Moving Range",
+                vlines=[df["Moving Range LCL"][0], df["Moving Range UCL"][0]],
+                bins=20,
+                title=f"Histogram For The Moving Range Of Residuals, {in_control} In Control",
+                font_size=16,
+            )
 
         # plot the predictions
         df = pd.DataFrame({
             "Prediction": predictions,
             "Actual": y,
         })
-        self.parity(
-            df,
-            predict="Prediction",
-            actual="Actual",
-            title=f"{self.name}: Parity Plot",
-            font_size=16,
-        )
+        if self.plots:
+            self.parity(
+                df,
+                predict="Prediction",
+                actual="Actual",
+                title="Parity Plot",
+                font_size=16,
+            )
 
     def importance(self, X):
         # get the feature importance to determine indicators of the target
@@ -359,19 +405,37 @@ class Regression:
         indicators = indicators.loc[indicators["Importance"] > 0]
 
         # plot the feature importance
-        self.bar_plot(
-            indicators,
-            x="Indicator",
-            y="Importance",
-            title=f"{self.name}: Feature Importance",
-            font_size=16,
-        )
+        if self.plots:
+            self.bar_plot(
+                indicators,
+                x="Indicator",
+                y="Importance",
+                title="Feature Importance",
+                font_size=16,
+            )
         self.indicators = indicators
 
     def monitor(self, X, y):
         y_name = self.y.columns[0]
         X[y_name] = y  # new data
-        df = pd.concat([self.X, self.y], axis="columns")  # data we trained on
+
+        # transform the raw data
+        modelX = self.names1.transform(self.X)
+        modelX = self.datetime.transform(modelX)
+        modelX = self.categorical.transform(modelX)
+        modelX = self.names2.transform(modelX)
+        modelX = self.impute.transform(modelX)
+        modelX = self.constant1.transform(modelX)
+        modelX = self.selection1.transform(modelX)
+        modelX = self.scaler.transform(modelX)
+        numbers = self.numbers.transform(modelX)
+        modelX = self.bin.transform(modelX)
+        modelX = self.reciprocals.transform(modelX)
+        modelX = self.interactions.transform(modelX)
+        modelX = pd.concat([modelX, numbers], axis="columns")
+        modelX = self.constant2.transform(modelX)
+        modelX = self.selection2.transform(modelX)
+        df = pd.concat([modelX, self.y], axis="columns")  # data we trained on
 
         # see if the distribtuion of the new data is the same as the data we trained on
         pvalues = list()
@@ -390,45 +454,15 @@ class Regression:
         ).reset_index(drop=True)
 
         # plot the pvalues
-        self.bar_plot(
-            pvalues,
-            x="Feature",
-            y="pvalue",
-            title=f"{self.name}: Feature Drift, Drift Detected If pvalue < 0.05",
-            font_size=16,
-        )
+        if self.plots:
+            self.bar_plot(
+                pvalues,
+                x="Feature",
+                y="pvalue",
+                title="Feature Drift, Drift Detected If pvalue < 0.05",
+                font_size=16,
+            )
         self.drift = pvalues
-
-        # compute control limits for predictions
-        df = self.imr(y)
-
-        # plot the control limits for predictions
-        in_control = df.loc[(df["Individual"] >= df["Individual LCL"]) & (df["Individual"] <= df["Individual UCL"])].shape[0]
-        in_control /= df.shape[0]
-        in_control *= 100
-        in_control = f"{round(in_control, 2)}%"
-        self.histogram(
-            df,
-            x="Individual",
-            vlines=[df["Individual LCL"][0], df["Individual UCL"][0]],
-            bins=20,
-            title=f"{self.name}: Histogram For Predictions, {in_control} In Control",
-            font_size=16,
-        )
-
-        # plot the control limits for the moving range of predictions
-        in_control = df.loc[(df["Moving Range"] >= df["Moving Range LCL"]) & (df["Moving Range"] <= df["Moving Range UCL"])].shape[0]
-        in_control /= df.shape[0]
-        in_control *= 100
-        in_control = f"{round(in_control, 2)}%"
-        self.histogram(
-            df,
-            x="Moving Range",
-            vlines=[df["Moving Range LCL"][0], df["Moving Range UCL"][0]],
-            bins=20,
-            title=f"{self.name}: Histogram For The Moving Range Of Predictions, {in_control} In Control",
-            font_size=16,
-        )
 
     def bootstrap(self, y_true, y_pred):
         df = pd.DataFrame({
@@ -498,7 +532,7 @@ class Regression:
         fig.add_trace(go.Scatter(x=df[actual], y=df[actual], mode="lines", showlegend=False, name="Actual"))
         fig.update_layout(font=dict(size=font_size))
         title = re.sub("[^A-Za-z0-9]+", " ", title)
-        plot(fig, filename=f"{self.name}/plots/{title}.html")
+        plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}{title}.html")
     
     def histogram(self, df, x, bins=20, vlines=None, title="Histogram", font_size=None):
         bin_size = (df[x].max() - df[x].min()) / bins
@@ -511,13 +545,13 @@ class Regression:
             ))
         fig.update_layout(font=dict(size=font_size))
         title = re.sub("[^A-Za-z0-9]+", " ", title)
-        plot(fig, filename=f"{self.name}/plots/{title}.html")
+        plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}{title}.html")
 
     def bar_plot(self, df, x, y, color=None, title="Bar Plot", font_size=None):
         fig = px.bar(df, x=x, y=y, color=color, title=title)
         fig.update_layout(font=dict(size=font_size))
         title = re.sub("[^A-Za-z0-9]+", " ", title)
-        plot(fig, filename=f"{self.name}/plots/{title}.html")
+        plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}{title}.html")
 
     def run_time(self, start, end):
         duration = end - start
@@ -535,89 +569,103 @@ class Regression:
 
     def dump(self):
         # save the machine learning pipeline and data
-        with open(f"{self.name}/dump/names1", "wb") as f:
+        # fit() or validate() has to be called for the pipeline and indicators to exist
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}names1", "wb") as f:
             pickle.dump(self.names1, f)
-        with open(f"{self.name}/dump/datetime", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}datetime", "wb") as f:
             pickle.dump(self.datetime, f)
-        with open(f"{self.name}/dump/categorical", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}categorical", "wb") as f:
             pickle.dump(self.categorical, f)
-        with open(f"{self.name}/dump/names2", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}names2", "wb") as f:
             pickle.dump(self.names2, f)
-        with open(f"{self.name}/dump/impute", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}impute", "wb") as f:
             pickle.dump(self.impute, f)
-        with open(f"{self.name}/dump/constant1", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}constant1", "wb") as f:
             pickle.dump(self.constant1, f)
-        with open(f"{self.name}/dump/scaler", "wb") as f:
-            pickle.dump(self.scaler, f)
-        with open(f"{self.name}/dump/selection1", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}selection1", "wb") as f:
             pickle.dump(self.selection1, f)
-        with open(f"{self.name}/dump/numbers", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}scaler", "wb") as f:
+            pickle.dump(self.scaler, f)
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}numbers", "wb") as f:
             pickle.dump(self.numbers, f)
-        with open(f"{self.name}/dump/bin", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}bin", "wb") as f:
             pickle.dump(self.bin, f)
-        with open(f"{self.name}/dump/reciprocals", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}reciprocals", "wb") as f:
             pickle.dump(self.reciprocals, f)
-        with open(f"{self.name}/dump/interactions", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}interactions", "wb") as f:
             pickle.dump(self.interactions, f)
-        with open(f"{self.name}/dump/constant2", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}constant2", "wb") as f:
             pickle.dump(self.constant2, f)
-        with open(f"{self.name}/dump/selection2", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}selection2", "wb") as f:
             pickle.dump(self.selection2, f)
-        with open(f"{self.name}/dump/tree", "wb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}tree", "wb") as f:
             pickle.dump(self.tree, f)
-        self.X.to_csv(f"{self.name}/dump/X.csv", index=False)
-        self.y.to_csv(f"{self.name}/dump/y.csv", index=False)
-        self.indicators.to_csv(f"{self.name}/dump/indicators.csv", index=False)
-        self.drift.to_csv(f"{self.name}/dump/drift.csv", index=False)
-        with open(f"{self.name}/dump/rmse", "wb") as f:
-            pickle.dump(self.rmse, f)
-        with open(f"{self.name}/dump/r2", "wb") as f:
-            pickle.dump(self.r2, f)
-        with open(f"{self.name}/dump/in_control", "wb") as f:
-            pickle.dump(self.in_control, f)
+        self.X.to_csv(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}X.csv", index=False)
+        self.y.to_csv(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}y.csv", index=False)
+        self.indicators.to_csv(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}indicators.csv", index=False)
+        try:  # predict() has to be called for drift to exist
+            self.drift.to_csv(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}drift.csv", index=False)
+        except:
+            pass
+        try:  # validate() has to be called for rmse, r2, and in_control to exist
+            with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}rmse", "wb") as f:
+                pickle.dump(self.rmse, f)
+            with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}r2", "wb") as f:
+                pickle.dump(self.r2, f)
+            with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}in_control", "wb") as f:
+                pickle.dump(self.in_control, f)
+        except:
+            pass
 
     def load(self):
         # load the machine learning pipeline and data
-        with open(f"{self.name}/dump/names1", "rb") as f:
+        # fit() or validate() had to have been called for the pipeline and indicators to exist
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}names1", "rb") as f:
             self.names1 = pickle.load(f)
-        with open(f"{self.name}/dump/datetime", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}datetime", "rb") as f:
             self.datetime = pickle.load(f)
-        with open(f"{self.name}/dump/categorical", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}categorical", "rb") as f:
             self.categorical = pickle.load(f)
-        with open(f"{self.name}/dump/names2", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}names2", "rb") as f:
             self.names2 = pickle.load(f)
-        with open(f"{self.name}/dump/impute", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}impute", "rb") as f:
             self.impute = pickle.load(f)
-        with open(f"{self.name}/dump/constant1", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}constant1", "rb") as f:
             self.constant1 = pickle.load(f)
-        with open(f"{self.name}/dump/scaler", "rb") as f:
-            self.scaler = pickle.load(f)
-        with open(f"{self.name}/dump/selection1", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}selection1", "rb") as f:
             self.selection1 = pickle.load(f)
-        with open(f"{self.name}/dump/numbers", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}scaler", "rb") as f:
+            self.scaler = pickle.load(f)
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}numbers", "rb") as f:
             self.numbers = pickle.load(f)
-        with open(f"{self.name}/dump/bin", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}bin", "rb") as f:
             self.bin = pickle.load(f)
-        with open(f"{self.name}/dump/reciprocals", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}reciprocals", "rb") as f:
             self.reciprocals = pickle.load(f)
-        with open(f"{self.name}/dump/interactions", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}interactions", "rb") as f:
             self.interactions = pickle.load(f)
-        with open(f"{self.name}/dump/constant2", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}constant2", "rb") as f:
             self.constant2 = pickle.load(f)
-        with open(f"{self.name}/dump/selection2", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}selection2", "rb") as f:
             self.selection2 = pickle.load(f)
-        with open(f"{self.name}/dump/tree", "rb") as f:
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}tree", "rb") as f:
             self.tree = pickle.load(f)
-        self.X = pd.read_csv(f"{self.name}/dump/X.csv")
-        self.y = pd.read_csv(f"{self.name}/dump/y.csv")
-        self.indicators = pd.read_csv(f"{self.name}/dump/indicators.csv")
-        self.drift = pd.read_csv(f"{self.name}/dump/drift.csv")
-        with open(f"{self.name}/dump/rmse", "rb") as f:
-            self.rmse = pickle.load(f)
-        with open(f"{self.name}/dump/r2", "rb") as f:
-            self.r2 = pickle.load(f)
-        with open(f"{self.name}/dump/in_control", "rb") as f:
-            self.in_control = pickle.load(f)
+        self.X = pd.read_csv(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}X.csv")
+        self.y = pd.read_csv(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}y.csv")
+        self.indicators = pd.read_csv(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}indicators.csv")
+        try:  # predict() had to have been called for drift to exist
+            self.drift = pd.read_csv(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}drift.csv")
+        except:
+            pass
+        try:  # validate() had to have been called for rmse, r2, and in_control to exist
+            with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}rmse", "rb") as f:
+                self.rmse = pickle.load(f)
+            with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}r2", "rb") as f:
+                self.r2 = pickle.load(f)
+            with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}in_control", "rb") as f:
+                self.in_control = pickle.load(f)
+        except:
+            pass
 
 
 class FeatureNames:
@@ -637,7 +685,8 @@ class FeatureNames:
     def transform(self, X, y=None):
         if not self.rename:
             return X
-
+        
+        X = X.copy()
         X.columns = self.columns
         return X
 
@@ -676,6 +725,8 @@ class TimeFeatures:
         if len(self.features) == 0:
             return X
         else:
+            X = X.copy()
+
             # convert any timestamp columns to datetime data type
             df = X[self.features].apply(
                 lambda col: pd.to_datetime(col, errors="ignore")
