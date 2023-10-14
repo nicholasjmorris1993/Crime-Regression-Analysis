@@ -625,7 +625,7 @@ class Regression:
     def parity(self, df, predict, actual, color=None, title="Parity Plot", font_size=None):
         fig = px.scatter(df, x=actual, y=predict, color=color, title=title)
         fig.add_trace(go.Scatter(x=df[actual], y=df[actual], mode="lines", showlegend=False, name="Actual"))
-        fig.update_layout(font=dict(size=font_size))
+        fig.update_layout(font=dict(size=font_size), title_x=0.5)
         title = re.sub("[^A-Za-z0-9]+", " ", title)
         plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}{title}.html")
     
@@ -638,13 +638,13 @@ class Regression:
         fig.update_traces(xbins=dict( # bins used for histogram
                 size=bin_size,
             ))
-        fig.update_layout(font=dict(size=font_size))
+        fig.update_layout(font=dict(size=font_size), title_x=0.5)
         title = re.sub("[^A-Za-z0-9]+", " ", title)
         plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}{title}.html")
 
     def bar_plot(self, df, x, y, color=None, title="Bar Plot", font_size=None):
         fig = px.bar(df, x=x, y=y, color=color, title=title)
-        fig.update_layout(font=dict(size=font_size))
+        fig.update_layout(font=dict(size=font_size), title_x=0.5)
         title = re.sub("[^A-Za-z0-9]+", " ", title)
         plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}{title}.html")
 
