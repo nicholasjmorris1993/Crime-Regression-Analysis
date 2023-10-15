@@ -272,6 +272,7 @@ class Prepare:
                 df = df.drop(columns=pair[0])
                 data = data.merge(right=df, how="left", on=pair[1])
                 data = data.sort_values(by="index").reset_index(drop=True)
+                data[pair[1]] = data[pair[1]].astype(str)
                 self.box_plot(
                     df=data, 
                     x=pair[0], 
