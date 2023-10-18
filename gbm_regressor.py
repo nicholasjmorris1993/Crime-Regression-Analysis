@@ -14,6 +14,7 @@ from sklearn.impute import KNNImputer
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.preprocessing import OneHotEncoder, MinMaxScaler, KBinsDiscretizer, PolynomialFeatures
 from xgboost.sklearn import XGBRegressor
+from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import mean_squared_error, r2_score
 from scipy.stats import kstest
 from itertools import combinations
@@ -43,6 +44,7 @@ class Regression:
         reciprocal=True, 
         interaction=True, 
         selection=True,
+        tune=True,
         plots=True,
     ):
         self.name = name  # name of the analysis
@@ -57,6 +59,7 @@ class Regression:
         self.reciprocal = reciprocal  # should reciporcals be computed?
         self.interaction = interaction  # should interactions be computed?
         self.selection = selection  # should we perform feature selection?
+        self.tune = tune  # should we tune the model?
         self.plots = plots  # should we plot the analysis?
         
         if self.path is None:
@@ -126,8 +129,7 @@ class Regression:
         trainX = pd.concat([trainX, numbers], axis="columns")
         trainX = self.constant2.fit_transform(trainX)
         trainX = self.selection2.fit_transform(trainX, trainy)
-        print("> Training XGBoost")
-        self.tree.fit(trainX, trainy)
+        self.grid(trainX, trainy)
 
         end = time.time()
         self.run_time(start, end)
@@ -219,8 +221,7 @@ class Regression:
         X = pd.concat([X, numbers], axis="columns")
         X = self.constant2.fit_transform(X)
         X = self.selection2.fit_transform(X, y)
-        print("> Training XGBoost")
-        self.tree.fit(X, y)
+        self.grid(X, y)
 
         end = time.time()
         self.run_time(start, end)
@@ -233,7 +234,54 @@ class Regression:
 
         end = time.time()
         self.run_time(start, end)
-                    
+    
+    def grid(self, X, y):
+        if self.tune:
+            print("> Tuning XGBoost")
+            print("> Cross Validating 15 Models")
+            parameters = {
+                "n_estimators": [25],
+                "learning_rate": [0.001, 0.01, 0.1],
+                "max_depth": [5, 7, 10, 14, 18],
+            }
+            grid = RandomizedSearchCV(
+                self.tree, 
+                parameters, 
+                cv=3,
+                refit=False,
+                random_state=0, 
+                n_jobs=1,
+            )
+            search = grid.fit(X, y)
+
+            print("> Training The Best Model")
+            self.tree = XGBRegressor(
+                booster="gbtree",
+                n_estimators=100, 
+                learning_rate=search.best_params_["learning_rate"],
+                max_depth=search.best_params_["max_depth"],
+                min_child_weight=1,
+                colsample_bytree=0.8,
+                subsample=0.8,
+                random_state=42,
+                n_jobs=-1,
+            )
+            self.tree.fit(X, y)
+        else:
+            print("> Training XGBoost")
+            self.tree = XGBRegressor(
+                booster="gbtree",
+                n_estimators=100, 
+                learning_rate=0.01,
+                max_depth=7,
+                min_child_weight=1,
+                colsample_bytree=0.8,
+                subsample=0.8,
+                random_state=42,
+                n_jobs=-1,
+            )
+            self.tree.fit(X, y)
+
     def predict(self, X):
         print("Model Prediction:")
         start = time.time()

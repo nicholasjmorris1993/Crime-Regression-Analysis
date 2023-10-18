@@ -47,6 +47,7 @@ class Regression:
         reciprocal=True, 
         interaction=True, 
         selection=True,
+        tune=True,
         plots=True,
     ):
         self.name = name  # name of the analysis
@@ -63,6 +64,7 @@ class Regression:
         self.reciprocal = reciprocal  # should reciporcals be computed?
         self.interaction = interaction  # should interactions be computed?
         self.selection = selection  # should we perform feature selection?
+        self.tune = tune  # should we tune the model?
         self.plots = plots  # should we plot the analysis?
 
         if self.path is None:
@@ -123,19 +125,7 @@ class Regression:
         trainX = self.constant2.fit_transform(trainX)
         trainX = self.selection2.fit_transform(trainX, trainy)
         trainX = self.scaler2.fit_transform(trainX)
-        print("> Training Neural Network")
-        if self.deep:
-            width = 10
-        else:
-            width = 2
-        self.nnet = self.build(
-            inputs=trainX.shape[1], 
-            outputs=trainy.shape[1], 
-            hidden=np.repeat(128, width), 
-            learning_rate=0.001, 
-            l1_penalty=0,
-        )
-        self.nnet.fit(trainX, trainy, epochs=500, batch_size=16, workers=-1, verbose=0)
+        self.grid(trainX, trainy)
 
         end = time.time()
         self.run_time(start, end)
@@ -219,19 +209,7 @@ class Regression:
         X = self.constant2.fit_transform(X)
         X = self.selection2.fit_transform(X, y)
         X = self.scaler2.fit_transform(X)
-        print("> Training Neural Network")
-        if self.deep:
-            width = 10
-        else:
-            width = 2
-        self.nnet = self.build(
-            inputs=X.shape[1], 
-            outputs=y.shape[1], 
-            hidden=np.repeat(128, width), 
-            learning_rate=0.001, 
-            l1_penalty=0,
-        )
-        self.nnet.fit(X, y, epochs=500, batch_size=16, workers=-1, verbose=0)
+        self.grid(X, y)
 
         end = time.time()
         self.run_time(start, end)
@@ -244,7 +222,101 @@ class Regression:
 
         end = time.time()
         self.run_time(start, end)
-                    
+
+    def grid(self, X, y):
+        if self.tune:
+            print("> Tuning Neural Network")
+            print("> Cross Validating 15 Models")
+            # build a grid search
+            learning_rate = [0.0001, 0.001, 0.01]
+            nodes = [32, 64, 128, 256, 512]
+            fold = [0, 1, 2]
+            grid = np.array(np.meshgrid(
+                learning_rate, 
+                nodes, 
+                fold,
+            )).reshape(3, len(learning_rate) * len(nodes) * len(fold)).T
+            grid = pd.DataFrame(grid, columns=["learning_rate", "nodes", "fold"])
+            grid["model"] = np.repeat(np.arange(15), 3)
+            grid["fold"] = grid["fold"].astype(int)
+            grid["nodes"] = grid["nodes"].astype(int)
+
+            # generate the folds
+            np.random.seed(0)
+            folds = np.random.randint(low=0, high=3, size=X.shape[0])
+
+            # score each model in the grid
+            rmse = list()
+            for i in range(grid.shape[0]):
+                # split the data into training and testing
+                test = np.where(folds == grid["fold"][i])[0]
+                train = np.where(folds != grid["fold"][i])[0]
+                trainX = X.copy().iloc[train, :]
+                trainy = y.copy().iloc[train, :]
+                testX = X.copy().iloc[test, :]
+                testy = y.copy().iloc[test, :]
+
+                # train the neural network
+                if self.deep:
+                    width = 10
+                else:
+                    width = 2
+                self.nnet = self.build(
+                    inputs=trainX.shape[1], 
+                    outputs=trainy.shape[1], 
+                    hidden=np.repeat(grid["nodes"][i], width), 
+                    learning_rate=grid["learning_rate"][i], 
+                    l1_penalty=0,
+                )
+                self.nnet.fit(trainX, trainy, epochs=50, batch_size=16, workers=-1, verbose=0)
+
+                # score the neural network
+                predictions = self.nnet.predict(testX, verbose=0).ravel()
+                rmse.append(mean_squared_error(
+                    y_true=testy.iloc[:, 0].to_numpy(),
+                    y_pred=predictions,
+                    squared=False,
+                ))
+
+            # get the best model
+            grid["rmse"] = rmse
+            grid = grid.groupby("model").agg({
+                "learning_rate": "mean", 
+                "nodes": "mean",
+                "rmse": "mean",
+            })
+            grid = grid.sort_values(by="rmse", ascending=True).reset_index(drop=True)
+            learning_rate = grid["learning_rate"][0]
+            nodes = int(grid["nodes"][0])
+
+            print("> Training The Best Model")
+            if self.deep:
+                width = 10
+            else:
+                width = 2
+            self.nnet = self.build(
+                inputs=X.shape[1], 
+                outputs=y.shape[1], 
+                hidden=np.repeat(nodes, width), 
+                learning_rate=learning_rate, 
+                l1_penalty=0,
+            )
+            self.nnet.fit(X, y, epochs=500, batch_size=16, workers=-1, verbose=0)
+        else:
+            print("> Training Neural Network")
+            if self.deep:
+                width = 10
+            else:
+                width = 2
+            self.nnet = self.build(
+                inputs=X.shape[1], 
+                outputs=y.shape[1], 
+                hidden=np.repeat(128, width), 
+                learning_rate=0.001, 
+                l1_penalty=0,
+            )
+            self.nnet.fit(X, y, epochs=500, batch_size=16, workers=-1, verbose=0)
+
     def predict(self, X):
         print("Model Prediction:")
         start = time.time()
