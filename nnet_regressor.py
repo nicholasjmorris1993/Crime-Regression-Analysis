@@ -251,10 +251,10 @@ class Regression:
                 # split the data into training and testing
                 test = np.where(folds == grid["fold"][i])[0]
                 train = np.where(folds != grid["fold"][i])[0]
-                trainX = X.copy().iloc[train, :]
-                trainy = y.copy().iloc[train, :]
-                testX = X.copy().iloc[test, :]
-                testy = y.copy().iloc[test, :]
+                trainX = X.copy().iloc[train, :].reset_index(drop=True)
+                trainy = y.copy().iloc[train, :].reset_index(drop=True)
+                testX = X.copy().iloc[test, :].reset_index(drop=True)
+                testy = y.copy().iloc[test, :].reset_index(drop=True)
 
                 # train the neural network
                 if self.deep:
