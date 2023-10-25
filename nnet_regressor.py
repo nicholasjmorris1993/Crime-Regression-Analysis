@@ -6,10 +6,15 @@ warnings.warn = warn
 import os
 import re
 import time
+from datetime import timedelta
 import pickle
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_datetime64_any_dtype as is_datetime
+import nltk
+nltk.download("vader_lexicon")
+from nltk.sentiment import SentimentIntensityAnalyzer
+from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.impute import KNNImputer
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.preprocessing import OneHotEncoder, MinMaxScaler, KBinsDiscretizer, PolynomialFeatures
@@ -17,7 +22,8 @@ from xgboost.sklearn import XGBRegressor
 import keras
 from keras import layers, optimizers, regularizers
 from sklearn.metrics import mean_squared_error, r2_score
-from scipy.stats import kstest
+from scipy.stats import kstest, pearsonr
+import scipy.cluster.hierarchy as sch
 from itertools import combinations
 import pandas_datareader as pdr
 import plotly.express as px
@@ -38,6 +44,7 @@ class Regression:
         deep=True,
         rename=True, 
         time=True, 
+        text=True,
         binary=True, 
         imputation=True, 
         variance=True,
@@ -55,6 +62,7 @@ class Regression:
         self.deep = deep  # should we build a deep neural network (10 layers) or a shallow one (2 layers)?
         self.rename = rename  # should features be renamed to remove whitespace?
         self.time = time  # should datetime features be computed?
+        self.text = text  # should we extract features from text features?
         self.binary = binary  # should categorical features be converted to binary features?
         self.imputation = imputation  # should missing values be filled in?
         self.variance = variance  # should we remove constant features?
@@ -75,6 +83,7 @@ class Regression:
         self.folder(f"{self.path}{path_sep}{self.name}{path_sep}dump")  # machine learning pipeline and data
         if self.plots:
             self.folder(f"{self.path}{path_sep}{self.name}{path_sep}plots")  # html figures
+            self.folder(f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}explore")  # html figures
 
     def validate(self, X, y):
         # raw data
@@ -93,6 +102,7 @@ class Regression:
         # set up the machine learning pipeline
         self.names1 = FeatureNames(self.rename)
         self.datetime = TimeFeatures(self.time)
+        self.txt = TextFeatures(self.text)
         self.categorical = CategoricalFeatures(self.binary)
         self.names2 = FeatureNames(self.rename)
         self.impute = ImputeFeatures(self.imputation)
@@ -111,6 +121,7 @@ class Regression:
         print("> Transforming The Training Data")
         trainX = self.names1.fit_transform(trainX)
         trainX = self.datetime.fit_transform(trainX)
+        trainX = self.txt.fit_transform(trainX)
         trainX = self.categorical.fit_transform(trainX)
         trainX = self.names2.fit_transform(trainX)
         trainX = self.impute.fit_transform(trainX)
@@ -137,6 +148,7 @@ class Regression:
         print("> Transforming The Testing Data")
         testX = self.names1.transform(testX)
         testX = self.datetime.transform(testX)
+        testX = self.txt.transform(testX)
         testX = self.categorical.transform(testX)
         testX = self.names2.transform(testX)
         testX = self.impute.transform(testX)
@@ -162,6 +174,8 @@ class Regression:
         
         print("> Perturbing Features")
         self.importance(trainX, trainy)
+        if self.plots:
+            self.plot_indicators(trainX, trainy)
 
         end = time.time()
         self.run_time(start, end)
@@ -177,6 +191,7 @@ class Regression:
         # set up the machine learning pipeline
         self.names1 = FeatureNames(self.rename)
         self.datetime = TimeFeatures(self.time)
+        self.txt = TextFeatures(self.text)
         self.categorical = CategoricalFeatures(self.binary)
         self.names2 = FeatureNames(self.rename)
         self.impute = ImputeFeatures(self.imputation)
@@ -195,6 +210,7 @@ class Regression:
         print("> Transforming The Data")
         X = self.names1.fit_transform(X)
         X = self.datetime.fit_transform(X)
+        X = self.txt.fit_transform(X)
         X = self.categorical.fit_transform(X)
         X = self.names2.fit_transform(X)
         X = self.impute.fit_transform(X)
@@ -219,6 +235,8 @@ class Regression:
         
         print("> Perturbing Features")
         self.importance(X, y)
+        if self.plots:
+            self.plot_indicators(X, y)
 
         end = time.time()
         self.run_time(start, end)
@@ -325,6 +343,7 @@ class Regression:
         print("> Transforming The New Data")
         X = self.names1.transform(X)
         X = self.datetime.transform(X)
+        X = self.txt.transform(X)
         X = self.categorical.transform(X)
         X = self.names2.transform(X)
         X = self.impute.transform(X)
@@ -368,6 +387,7 @@ class Regression:
         print("> Transforming The Updated Data")
         X = self.names1.fit_transform(self.X)
         X = self.datetime.fit_transform(X)
+        X = self.txt.fit_transform(X)
         X = self.categorical.fit_transform(X)
         X = self.names2.fit_transform(X)
         X = self.impute.fit_transform(X)
@@ -405,11 +425,15 @@ class Regression:
         
         print("> Perturbing Features")
         self.importance(X, self.y)
+        if self.plots:
+            self.plot_indicators(X, self.y)
 
         end = time.time()
         self.run_time(start, end)
 
     def performance(self, X, y):
+        name = y.columns[0]
+
         # compute RMSE and R2
         predictions = self.nnet.predict(X, verbose=0).ravel()
         y = y.iloc[:,0].to_numpy()
@@ -486,6 +510,18 @@ class Regression:
                 title="Parity Plot",
                 font_size=16,
             )
+        
+        df["Observation"] = df.index + 1
+        df = df.melt(id_vars="Observation", var_name=name, value_name="Value")
+        if self.plots:
+            self.line_plot(
+                df,
+                x="Observation",
+                y="Value",
+                color=name,
+                title="Predictions Over Time",
+                font_size=16,
+            )
 
     def importance(self, X, y):
         # get the feature importance to determine indicators of the target
@@ -515,7 +551,6 @@ class Regression:
 
         # perturb each feature to evaluate how much the prediction error changes
         for col in X.columns:
-            mean = X[col].mean()
             for i in range(iterations):
                 X_perturb[col] = X[col] * perturb1[:,i] + perturb2[:,i]  # perturb
                 rmse.append(mean_squared_error(  # prediction error
@@ -546,8 +581,8 @@ class Regression:
         if self.plots:
             self.bar_plot(
                 indicators,
-                x="Indicator",
-                y="Importance",
+                y="Indicator",
+                x="Importance",
                 title="Feature Importance",
                 font_size=16,
             )
@@ -560,6 +595,7 @@ class Regression:
         # transform the raw data
         modelX = self.names1.transform(self.X)
         modelX = self.datetime.transform(modelX)
+        modelX = self.txt.transform(modelX)
         modelX = self.categorical.transform(modelX)
         modelX = self.names2.transform(modelX)
         modelX = self.impute.transform(modelX)
@@ -596,8 +632,8 @@ class Regression:
         if self.plots:
             self.bar_plot(
                 pvalues,
-                x="Feature",
-                y="pvalue",
+                y="Feature",
+                x="pvalue",
                 title="Feature Drift, Drift Detected If pvalue < 0.05",
                 font_size=16,
             )
@@ -665,7 +701,32 @@ class Regression:
         df["Moving Range CL"] = MR_CL
 
         return df
-    
+
+    def plot_indicators(self, X, y):
+        top5 = self.indicators["Indicator"][:5].tolist()
+
+        for col in top5:
+            df = X.copy()[[col]]
+            df = pd.concat([df, y], axis="columns")
+
+            if len(X[col].unique()) <= 2:
+                df[col] = df[col].astype(str)
+                self.box_plot2(
+                    df,
+                    x=df.columns[1],
+                    y=df.columns[0],
+                    title=f"{df.columns[1]} vs. {df.columns[0]}",
+                    font_size=16,
+                )
+            else:
+                self.scatter_plot2(
+                    df,
+                    x=df.columns[1],
+                    y=df.columns[0],
+                    title=f"{df.columns[1]} vs. {df.columns[0]}",
+                    font_size=16,
+                )
+
     def build(self, inputs, outputs, hidden, learning_rate=0.001, l1_penalty=0):
         activation = "linear"
         loss = "mean_squared_error"
@@ -715,10 +776,233 @@ class Regression:
         plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}{title}.html")
 
     def bar_plot(self, df, x, y, color=None, title="Bar Plot", font_size=None):
-        fig = px.bar(df, x=x, y=y, color=color, title=title)
+        fig = px.bar(df, x=x, y=y, color=color, title=title, barmode="group")
         fig.update_layout(font=dict(size=font_size), title_x=0.5)
         title = re.sub("[^A-Za-z0-9]+", " ", title)
         plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}{title}.html")
+
+    def line_plot(self, df, x, y, color=None, title="Line Plot", font_size=None):
+        fig = px.line(df, x=x, y=y, color=color, title=title)
+        fig.update_layout(font=dict(size=font_size), title_x=0.5)
+        title = re.sub("[^A-Za-z0-9]+", " ", title)
+        plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}{title}.html")
+
+    def scatter_plot2(self, df, x, y, color=None, title="Scatter Plot", font_size=None):
+        fig = px.scatter(df, x=x, y=y, color=color, title=title)
+        fig.update_layout(font=dict(size=font_size), title_x=0.5)
+        title = re.sub("[^A-Za-z0-9]+", " ", title)
+        plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}{title}.html")
+
+    def box_plot2(self, df, x, y, color=None, title="Box Plot", font_size=None):
+        fig = px.box(df, x=x, y=y, color=color, title=title)
+        fig.update_layout(font=dict(size=font_size), title_x=0.5)
+        title = re.sub("[^A-Za-z0-9]+", " ", title)
+        plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}{title}.html")
+
+    def explore(self, df):
+        print("Visualizing The Data:")
+        start = time.time()
+
+        df = df.ffill().bfill()  # fill in missing values with the last known value
+        self.separate(df)
+        self.correlations(df)
+        self.scatter_plots(df)
+        self.histograms(df)
+        self.bar_plots(df)
+        self.pairwise_bar_plots(df)
+        self.boxplots(df)
+
+        end = time.time()
+        self.run_time(start, end)
+
+    def separate(self, df):
+        # convert any timestamp columns to datetime data type
+        df = df.apply(
+            lambda col: pd.to_datetime(col, errors="ignore")
+            if col.dtypes == object 
+            else col, 
+            axis=0,
+        )
+
+        # check if any columns are timestamps
+        datetime = [col for col in df.columns if is_datetime(df[col])]
+
+        # check if any columns are text
+        text = list()
+        strings = df.select_dtypes(include="object").columns.tolist()
+        for col in strings:
+            spaces = df[col].str.count(" ").mean()
+            if spaces >= 3:
+                text.append(col)
+        
+        # remove datetime and text columns
+        df = df.drop(columns=datetime + text)
+
+        # get categorical features
+        strings = df.select_dtypes(include="object").columns.tolist()
+        df2 = df.copy().drop(columns=strings)
+        numbers = [col for col in df2.columns if len(df2[col].unique()) <= 60 and (df2[col] % 1 == 0).all()]
+        self.strings = strings + numbers
+
+        # get numeric features
+        self.numeric = df.drop(columns=self.strings).columns.tolist()
+
+    def correlations(self, df):
+        if self.plots and len(self.numeric) >= 2:
+            print("> Plotting Correlations")
+            self.correlation_plot(
+                df=df[self.numeric], 
+                title="Correlation Heatmap",
+                font_size=16,
+            )
+
+    def scatter_plots(self, df):
+        if self.plots and len(self.numeric) >= 2:
+            pairs = list(combinations(self.numeric, 2))
+            for pair in pairs:
+                correlation = pearsonr(df[pair[0]].tolist(), df[pair[1]].tolist()).statistic
+                if correlation >= 0.7:
+                    print(f"> {pair[0]} vs. {pair[1]}")
+                    self.scatter_plot(
+                        df=df,
+                        x=pair[0],
+                        y=pair[1],
+                        color=None,
+                        title=f"{pair[0]} vs. {pair[1]}",
+                        font_size=16,
+                    )
+
+    def histograms(self, df):
+        if self.plots and len(self.numeric) >= 1:
+            for col in self.numeric:
+                print(f"> Plotting {col}")
+                self.histogram2(
+                    df=df,
+                    x=col,
+                    bins=20,
+                    title=col,
+                    font_size=16,
+                )
+                
+    def bar_plots(self, df):
+        if self.plots and len(self.strings) >= 1:
+            for col in self.strings:
+                proportion = df[col].value_counts(normalize=True).reset_index()
+                proportion.columns = ["Label", "Proportion"]
+                proportion = proportion.sort_values(by="Proportion", ascending=False).reset_index(drop=True)
+                maximum = proportion["Proportion"][0]
+                minimum = proportion["Proportion"].tail(1).values[0]
+                if maximum - minimum >= 0.1:
+                    print(f"> Plotting {col}")
+                    self.bar_plot2(
+                        df=proportion,
+                        x="Proportion",
+                        y="Label",
+                        title=col,
+                        font_size=16,
+                    )
+
+    def pairwise_bar_plots(self, df):
+        if self.plots and len(self.strings) >= 2:
+            pairs = list(combinations(self.strings, 2))
+            for pair in pairs:
+                data = pd.DataFrame()
+                data[f"{pair[0]}, {pair[1]}"] = df[pair[0]].astype(str) + ", " + df[pair[1]].astype(str)
+                proportion = data[f"{pair[0]}, {pair[1]}"].value_counts(normalize=True).reset_index()
+                proportion.columns = [f"{pair[0]}, {pair[1]}", "Proportion"]
+                proportion = proportion.sort_values(by="Proportion", ascending=False).reset_index(drop=True)
+                maximum = proportion["Proportion"][0]
+                minimum = proportion["Proportion"].tail(1).values[0]
+                if maximum - minimum >= 0.1:
+                    print(f"> {pair[0]} vs. {pair[1]}")
+                    self.bar_plot2(
+                        df=proportion,
+                        x="Proportion",
+                        y=f"{pair[0]}, {pair[1]}",
+                        title=f"{pair[0]} vs. {pair[1]}",
+                        font_size=16,
+                    )
+
+    def boxplots(self, df):
+        if self.plots and len(self.numeric) >= 1 and len(self.strings) >= 1:
+            pairs = list()
+            for number in self.numeric:
+                for string in self.strings:
+                    pairs.append((number, string))
+            
+            for pair in pairs:
+                # sort the data by the group average
+                data = df.copy()
+                df2 = data.groupby(pair[1]).agg({pair[0]: "mean"}).reset_index()
+                df2 = df2.sort_values(by=pair[0]).reset_index(drop=True).reset_index()
+                minimum = df2[pair[0]][0]
+                maximum = df2[pair[0]].tail(1).values[0]
+                df2 = df2.drop(columns=pair[0])
+                data = data.merge(right=df2, how="left", on=pair[1])
+                data = data.sort_values(by="index").reset_index(drop=True)
+                change = maximum / minimum - 1
+                if change >= 0.1:
+                    print(f"> {pair[0]} vs. {pair[1]}")
+                    data[pair[1]] = data[pair[1]].astype(str)
+                    self.box_plot(
+                        df=data, 
+                        x=pair[0], 
+                        y=pair[1],
+                        title=f"{pair[0]} vs. {pair[1]}",
+                        font_size=16,
+                    )
+
+    def correlation_plot(self, df, title="Correlation Heatmap", font_size=None):
+        df = df.copy()
+        correlation = df.corr()
+
+        # group columns together with hierarchical clustering
+        X = correlation.values
+        d = sch.distance.pdist(X)
+        L = sch.linkage(d, method="ward")
+        ind = sch.fcluster(L, 0.5*d.max(), "distance")
+        columns = [df.columns.tolist()[i] for i in list((np.argsort(ind)))]
+        df = df.reindex(columns, axis=1)
+        
+        # compute the correlation matrix for the received dataframe
+        correlation = df.corr()
+
+        # plot the correlation matrix
+        fig = px.imshow(correlation, title=title, range_color=(-1, 1))
+        fig.update_layout(font=dict(size=font_size), title_x=0.5)
+        title = re.sub("[^A-Za-z0-9]+", " ", title)
+        plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}explore{path_sep}{title}.html")
+
+    def scatter_plot(self, df, x, y, color=None, title="Scatter Plot", font_size=None):
+        fig = px.scatter(df, x=x, y=y, color=color, title=title)
+        fig.update_layout(font=dict(size=font_size), title_x=0.5)
+        title = re.sub("[^A-Za-z0-9]+", " ", title)
+        plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}explore{path_sep}{title}.html")
+
+    def histogram2(self, df, x, bins=20, vlines=None, title="Histogram", font_size=None):
+        bin_size = (df[x].max() - df[x].min()) / bins
+        fig = px.histogram(df, x=x, title=title)
+        if vlines is not None:
+            for line in vlines:
+                fig.add_vline(x=line)
+        fig.update_traces(xbins=dict( # bins used for histogram
+                size=bin_size,
+            ))
+        fig.update_layout(font=dict(size=font_size), title_x=0.5)
+        title = re.sub("[^A-Za-z0-9]+", " ", title)
+        plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}explore{path_sep}{title}.html")
+
+    def bar_plot2(self, df, x, y, color=None, title="Bar Plot", font_size=None):
+        fig = px.bar(df, x=x, y=y, color=color, title=title, barmode="group")
+        fig.update_layout(font=dict(size=font_size), title_x=0.5)
+        title = re.sub("[^A-Za-z0-9]+", " ", title)
+        plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}explore{path_sep}{title}.html")
+
+    def box_plot(self, df, x, y, color=None, title="Box Plot", font_size=None):
+        fig = px.box(df, x=x, y=y, color=color, title=title)
+        fig.update_layout(font=dict(size=font_size), title_x=0.5)
+        title = re.sub("[^A-Za-z0-9]+", " ", title)
+        plot(fig, filename=f"{self.path}{path_sep}{self.name}{path_sep}plots{path_sep}explore{path_sep}{title}.html")
 
     def run_time(self, start, end):
         duration = end - start
@@ -741,6 +1025,8 @@ class Regression:
             pickle.dump(self.names1, f)
         with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}datetime", "wb") as f:
             pickle.dump(self.datetime, f)
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}txt", "wb") as f:
+            pickle.dump(self.txt, f)
         with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}categorical", "wb") as f:
             pickle.dump(self.categorical, f)
         with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}names2", "wb") as f:
@@ -792,6 +1078,8 @@ class Regression:
             self.names1 = pickle.load(f)
         with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}datetime", "rb") as f:
             self.datetime = pickle.load(f)
+        with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}txt", "rb") as f:
+            self.txt = pickle.load(f)
         with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}categorical", "rb") as f:
             self.categorical = pickle.load(f)
         with open(f"{self.path}{path_sep}{self.name}{path_sep}dump{path_sep}names2", "rb") as f:
@@ -919,8 +1207,8 @@ class TimeFeatures:
                 
                 # economic data
                 dates = df[col].dt.date
-                start = min(dates)
-                end = max(dates)
+                start = min(dates) - timedelta(days=40)
+                end = max(dates) + timedelta(days=40)
                 fred = pdr.DataReader([
                     "NASDAQCOM", 
                     "UNRATE", 
@@ -951,6 +1239,69 @@ class TimeFeatures:
         return self.transform(X, y)
 
 
+class TextFeatures:
+    def __init__(self, text=True, verbose=True):
+        self.text = text
+        self.verbose = verbose
+
+    def fit(self, X, y=None):
+        if not self.text:
+            return self
+        if self.verbose:
+            print("> Transforming Text Features")
+
+        self.txt = list()
+        strings = X.select_dtypes(include="object").columns.tolist()
+        for col in strings:
+            spaces = X[col].str.count(" ").mean()
+            if spaces >= 3:
+                self.txt.append(col)
+        
+        if len(self.txt) == 0:
+            return self
+
+        self.count = dict()
+        for col in self.txt:
+            self.count[col] = CountVectorizer(binary=True)
+            self.count[col].fit(X[col].tolist())
+
+        return self
+
+    def transform(self, X, y=None):
+        if not self.text:
+            return X
+
+        if len(self.txt) == 0:
+            return X
+
+        nontext = X.copy().drop(columns=self.txt)
+
+        # get the key words from the text
+        binary = pd.DataFrame()
+        for col in self.txt:
+            array = self.count[col].transform(X[col].tolist()).toarray()
+            names = self.count[col].get_feature_names_out()
+            names = [f"{col}_{name}" for name in names]
+            array = pd.DataFrame(array, columns=names)
+            binary = pd.concat([binary, array], axis="columns")
+
+        # get the positivity score of the text
+        positivity = pd.DataFrame()
+        sia = SentimentIntensityAnalyzer()
+        for col in self.txt:
+            scores = list()
+            for item in X[col]:
+                scores.append(sia.polarity_scores(item)["compound"])
+            positivity[f"{col}_positivity"] = scores
+
+        df = pd.concat([nontext, binary, positivity], axis="columns")
+        return df
+
+    def fit_transform(self, X, y=None):
+        self.fit(X, y)
+        return self.transform(X, y)
+
+
 class CategoricalFeatures:
     def __init__(self, binary=True, verbose=True):
         self.binary = binary
@@ -964,7 +1315,7 @@ class CategoricalFeatures:
 
         strings = X.select_dtypes(include="object").columns.tolist()
         df = X.copy().drop(columns=strings)
-        numbers = [col for col in df.columns if len(df[col].unique()) <= 60 and (df[col] % 1 == 0).all()]
+        numbers = [col for col in df.columns if len(df[col].unique()) <= 60 and (df[col] % 1 == 0).all() and sorted(df[col].unique()) != [0, 1]]
         self.categorical = strings + numbers
         if len(self.categorical) == 0:
             return self
