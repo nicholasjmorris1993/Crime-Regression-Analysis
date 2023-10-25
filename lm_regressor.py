@@ -782,6 +782,8 @@ class Regression:
                 df2 = df2.drop(columns=pair[0])
                 data = data.merge(right=df2, how="left", on=pair[1])
                 data = data.sort_values(by="index").reset_index(drop=True)
+                if minimum == 0:
+                    minimum = 0.1
                 change = maximum / minimum - 1
                 if change >= 0.1:
                     print(f"> {pair[0]} vs. {pair[1]}")
