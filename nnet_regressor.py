@@ -402,20 +402,7 @@ class Regression:
         X = self.constant2.fit_transform(X)
         X = self.selection2.fit_transform(X, self.y)
         X = self.scaler2.fit_transform(X)
-
-        print("> Training Neural Network")
-        if self.deep:
-            width = 10
-        else:
-            width = 2
-        self.nnet = self.build(
-            inputs=X.shape[1], 
-            outputs=self.y.shape[1], 
-            hidden=np.repeat(128, width), 
-            learning_rate=0.001, 
-            l1_penalty=0,
-        )
-        self.nnet.fit(X, self.y, epochs=500, batch_size=16, workers=-1, verbose=0)
+        self.grid(X, self.y)
 
         end = time.time()
         self.run_time(start, end)
@@ -575,7 +562,6 @@ class Regression:
             by="Importance", 
             ascending=False,
         ).reset_index(drop=True)
-        indicators = indicators.loc[indicators["Importance"] > 0]
 
         # plot the feature importance
         if self.plots:

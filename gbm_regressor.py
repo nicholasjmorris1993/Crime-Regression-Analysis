@@ -365,9 +365,7 @@ class Regression:
         X = pd.concat([X, numbers], axis="columns")
         X = self.constant2.fit_transform(X)
         X = self.selection2.fit_transform(X, self.y)
-        
-        print("> Training XGBoost")
-        self.tree.fit(X, self.y)
+        self.grid(X, self.y)
         
         end = time.time()
         self.run_time(start, end)
